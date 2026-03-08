@@ -2283,6 +2283,34 @@ button:focus-visible,
 }
 
 /* ══════════════════════════════════════ */
+/*  DISCORD BUTTON STYLES                 */
+/* ══════════════════════════════════════ */
+.btn-discord {
+    background: #5865F2 !important;
+    color: #ffffff !important;
+    border-color: #5865F2 !important;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+.btn-discord::before {
+    background: #4752C4 !important;
+}
+.btn-discord:hover {
+    color: #ffffff !important;
+    background: #4752C4 !important;
+}
+
+.btn-nav-discord {
+    background: transparent !important;
+    color: #5865F2 !important;
+    border-color: #5865F2 !important;
+}
+.btn-nav-discord:hover {
+    background: rgba(88, 101, 242, 0.1) !important;
+}
+
+/* ══════════════════════════════════════ */
 /*  CONTROL BAR (RUN/STOP BUTTONS)       */
 /* ══════════════════════════════════════ */
 .dash-control-bar {
@@ -2301,8 +2329,8 @@ button:focus-visible,
 }
 
 .btn-run-main {
-    padding: clamp(14px, 2vh, 18px) clamp(40px, 6vw, 60px);
-    font-size: clamp(13px, 2vw, 16px);
+    padding: 10px 70px;
+    font-size: 14px;
     font-weight: 800;
     letter-spacing: 2px;
     text-transform: uppercase;
@@ -2316,50 +2344,29 @@ button:focus-visible,
     align-items: center;
     justify-content: center;
     border-radius: 6px;
-    box-shadow: 0 6px 20px rgba(74, 222, 128, 0.4);
-    min-height: 52px;
+    min-height: 42px;
     position: relative;
     overflow: hidden;
 }
 
-.btn-run-main::before {
-    content: '';
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    width: 0;
-    height: 0;
-    border-radius: 50%;
-    background: rgba(255, 255, 255, 0.3);
-    transform: translate(-50%, -50%);
-    transition: width 0.6s, height 0.6s;
-}
-
-.btn-run-main:hover::before {
-    width: 300px;
-    height: 300px;
-}
-
 .btn-run-main:hover {
     background: #22c55e;
-    transform: translateY(-3px);
-    box-shadow: 0 10px 30px rgba(74, 222, 128, 0.5);
+    transform: translateY(-2px);
 }
 
 .btn-run-main:active {
-    transform: translateY(-1px);
-    box-shadow: 0 4px 15px rgba(74, 222, 128, 0.4);
+    transform: translateY(0);
 }
 
 .btn-stop-main {
-    padding: clamp(14px, 2vh, 18px) clamp(40px, 6vw, 60px);
-    font-size: clamp(13px, 2vw, 16px);
+    padding: 10px 70px;
+    font-size: 14px;
     font-weight: 800;
     letter-spacing: 2px;
     text-transform: uppercase;
     background: transparent;
     color: var(--error);
-    border: 3px solid var(--error);
+    border: 2px solid var(--error);
     cursor: pointer;
     transition: all 0.3s ease;
     font-family: inherit;
@@ -2367,18 +2374,17 @@ button:focus-visible,
     align-items: center;
     justify-content: center;
     border-radius: 6px;
-    min-height: 52px;
+    min-height: 42px;
 }
 
 .btn-stop-main:hover {
     background: var(--error);
     color: #000000;
-    transform: translateY(-3px);
-    box-shadow: 0 10px 30px rgba(239, 68, 68, 0.5);
+    transform: translateY(-2px);
 }
 
 .btn-stop-main:active {
-    transform: translateY(-1px);
+    transform: translateY(0);
 }
 
 @media (max-width: 768px) {
