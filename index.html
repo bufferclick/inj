@@ -282,18 +282,6 @@
                 </div>
             </div>
             <div class="dash-topbar-right">
-                <button class="btn-run-main" id="btnRun" onclick="runBot()">
-                    <svg style="width:16px;height:16px;margin-right:6px;fill:currentColor;" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                        <path d="M8 5v14l11-7z"/>
-                    </svg>
-                    RUN
-                </button>
-                <button class="btn-stop" id="btnStop" onclick="stopBot()" style="display:none;">
-                    <svg style="width:14px;height:14px;margin-right:6px;fill:currentColor;" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                        <rect x="6" y="6" width="12" height="12"/>
-                    </svg>
-                    STOP
-                </button>
                 <button class="btn-xs btn-secondary" onclick="navigateTo('landing')">Home</button>
             </div>
         </div>
@@ -312,6 +300,21 @@
                     <button class="btn btn-primary btn-sm" onclick="openNewFileModal()">+ Add File</button>
                 </div>
                 <div class="dash-editor" id="dashEditor">
+                    <div class="dash-control-bar">
+                        <button class="btn-run-main" id="btnRun" onclick="runBot()">
+                            <svg style="width:18px;height:18px;margin-right:8px;fill:currentColor;" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M8 5v14l11-7z"/>
+                            </svg>
+                            RUN BOT
+                        </button>
+                        <button class="btn-stop-main" id="btnStop" onclick="stopBot()" style="display:none;">
+                            <svg style="width:16px;height:16px;margin-right:8px;fill:currentColor;" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                                <rect x="6" y="6" width="12" height="12"/>
+                            </svg>
+                            STOP BOT
+                        </button>
+                        <div class="control-bar-spacer"></div>
+                    </div>
                     <div class="dash-editor-header">
                         <div class="dash-editor-tabs" id="dashEditorTabs"></div>
                         <div class="dash-editor-actions">
@@ -333,7 +336,7 @@
                     <div class="dash-console-body" id="consoleBody">
                         <div class="console-line">
                             <span class="console-time">--:--:--</span>
-                            <span class="console-msg info">Welcome to inj* console. Click "RUN" to start your bot.</span>
+                            <span class="console-msg info">Welcome to inj* console. Click "RUN BOT" to start your bot.</span>
                         </div>
                     </div>
                 </div>
