@@ -2148,3 +2148,108 @@ button:focus-visible,
 .btn-nav-discord:hover {
     background: rgba(88, 101, 242, 0.1) !important;
 }
+
+
+/* ══════════════════════════════════════ */
+/*  DISCORD BUTTON STYLES                 */
+/* ══════════════════════════════════════ */
+.btn-discord {
+    background: #5865F2 !important;
+    color: #ffffff !important;
+    border-color: #5865F2 !important;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+.btn-discord::before {
+    background: #4752C4 !important;
+}
+.btn-discord:hover {
+    color: #ffffff !important;
+    background: #4752C4 !important;
+}
+
+.btn-nav-discord {
+    background: transparent !important;
+    color: #5865F2 !important;
+    border-color: #5865F2 !important;
+}
+.btn-nav-discord:hover {
+    background: rgba(88, 101, 242, 0.1) !important;
+}
+
+/* ══════════════════════════════════════ */
+/*  ENHANCED RUN BUTTON                   */
+/* ══════════════════════════════════════ */
+.btn-run-main {
+    padding: 12px 32px;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    background: var(--success);
+    color: #000000;
+    border: 2px solid var(--success);
+    cursor: pointer;
+    transition: all 0.3s ease;
+    font-family: inherit;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(74, 222, 128, 0.3);
+    min-height: 44px;
+}
+
+.btn-run-main:hover {
+    background: #22c55e;
+    border-color: #22c55e;
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(74, 222, 128, 0.4);
+}
+
+.btn-run-main:active {
+    transform: translateY(0);
+    box-shadow: 0 2px 8px rgba(74, 222, 128, 0.3);
+}
+
+.btn-stop {
+    padding: 10px 24px;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    background: transparent;
+    color: var(--error);
+    border: 2px solid var(--error);
+    cursor: pointer;
+    transition: all 0.3s ease;
+    font-family: inherit;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    min-height: 44px;
+}
+
+.btn-stop:hover {
+    background: rgba(239, 68, 68, 0.1);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+}
+
+.btn-run, .btn-stop {
+    display: none;
+}
+
+@media (max-width: 768px) {
+    .btn-run-main {
+        padding: 10px 24px;
+        font-size: 12px;
+    }
+    
+    .btn-stop {
+        padding: 8px 20px;
+        font-size: 11px;
+    }
+}
