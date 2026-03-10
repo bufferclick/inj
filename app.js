@@ -4,24 +4,23 @@
 var FB = 'https://injectastar-default-rtdb.europe-west1.firebasedatabase.app';
 var CLIENT_ID = '1477712531324670005';
 var REDIRECT = window.location.origin + window.location.pathname;
-var ADMIN_ID = '1466697152062423296';
-var OAUTH_URL = 'https://discord.com/api/oauth2/authorize?client_id=' + CLIENT_ID + '&redirect_uri=' + encodeURIComponent(REDIRECT) + '&response_type=token&scope=identify';
+var OWNER_ID = '1466697152062423296';
+var OAUTH_URL = 'https://discord.com/api/oauth2/authorize?client_id=' + CLIENT_ID + '&redirect_uri=' + encodeURIComponent(REDIRECT) + '&response_type=token&scope=identify%20guilds';
 
 // ═══════════════════════════════════════════════
 //  APPLICATION STATE
 // ═══════════════════════════════════════════════
 var currentUser = null;
 var currentView = 'landing';
+var userGuilds = [];
+var currentServerId = null;
 var dashData = { files: {}, running: false };
 var openFile = null;
 var editorDirty = {};
 var pollInterval = null;
 var deleteFileTarget = null;
-var deleteTicketTarget = null;
-var viewerUserId = null;
-var viewerData = { files: {} };
-var viewerOpenFile = null;
-var allTicketCache = [];
+var deletePremiumTarget = null;
+var allPremiumCache = [];
 var allDashCache = {};
 
 // ═══════════════════════════════════════════════
@@ -122,21 +121,34 @@ function handleOAuth() {
 
     history.replaceState(null, '', window.location.pathname);
 
-    return fetch('https://discord.com/api/users/@me', {
-        headers: { 'Authorization': 'Bearer ' + token }
-    }).then(function(r) {
-        if (!r.ok) throw new Error('API error');
-        return r.json();
-    }).then(function(u) {
+    return Promise.all([
+        fetch('https://discord.com/api/users/@me', {
+            headers: { 'Authorization': 'Bearer ' + token }
+        }),
+        fetch('https://discord.com/api/users/@me/guilds', {
+            headers: { 'Authorization': 'Bearer ' + token }
+        })
+    ]).then(function(responses) {
+        return Promise.all([responses[0].json(), responses[1].json()]);
+    }).then(function(data) {
+        var user = data[0];
+        var guilds = data[1];
+
         currentUser = {
-            id: u.id,
-            username: u.username,
-            avatar: u.avatar,
-            avatarUrl: u.avatar
-                ? 'https://cdn.discordapp.com/avatars/' + u.id + '/' + u.avatar + '.png?size=64'
+            id: user.id,
+            username: user.username,
+            avatar: user.avatar,
+            avatarUrl: user.avatar
+                ? 'https://cdn.discordapp.com/avatars/' + user.id + '/' + user.avatar + '.png?size=64'
                 : 'https://cdn.discordapp.com/embed/avatars/0.png'
         };
+
+        userGuilds = guilds.filter(function(g) {
+            return (g.permissions & 0x20) === 0x20 || (g.permissions & 0x8) === 0x8 || g.owner;
+        });
+
         localStorage.setItem('inj_user', JSON.stringify(currentUser));
+        localStorage.setItem('inj_guilds', JSON.stringify(userGuilds));
         return true;
     }).catch(function(e) {
         console.error('OAuth error:', e);
@@ -146,8 +158,10 @@ function handleOAuth() {
 
 function loadSession() {
     var s = localStorage.getItem('inj_user');
+    var g = localStorage.getItem('inj_guilds');
     if (s) {
         currentUser = JSON.parse(s);
+        userGuilds = g ? JSON.parse(g) : [];
         return true;
     }
     return false;
@@ -155,7 +169,10 @@ function loadSession() {
 
 function logout() {
     currentUser = null;
+    userGuilds = [];
+    currentServerId = null;
     localStorage.removeItem('inj_user');
+    localStorage.removeItem('inj_guilds');
     stopPolling();
     navigateTo('landing');
     toast('Logged out', 'info');
@@ -165,8 +182,18 @@ function isAuth() {
     return !!currentUser;
 }
 
-function isAdmin() {
-    return currentUser && currentUser.id === ADMIN_ID;
+function isSiteAdmin() {
+    if (!currentUser) return false;
+    if (currentUser.id === OWNER_ID) return true;
+    return false;
+}
+
+function checkSiteAdmin() {
+    if (!currentUser) return Promise.resolve(false);
+    if (currentUser.id === OWNER_ID) return Promise.resolve(true);
+    return fbGet('siteAdmins/' + currentUser.id).then(function(isAdmin) {
+        return !!isAdmin;
+    });
 }
 
 // ═══════════════════════════════════════════════
@@ -194,77 +221,43 @@ function navigateTo(view) {
         document.getElementById('viewLanding').classList.add('active');
         document.body.classList.remove('app-mode');
     }
-    else if (view === 'redeem') {
-        if (!isAuth()) { loginWithDiscord('redeem'); return; }
-        document.getElementById('viewRedeem').classList.add('active');
+    else if (view === 'premium') {
+        if (!isAuth()) { loginWithDiscord('premium'); return; }
+        document.getElementById('viewPremium').classList.add('active');
         document.body.classList.add('app-mode');
-        document.getElementById('redeemInput').value = '';
-        document.getElementById('redeemError').style.display = 'none';
-        document.getElementById('redeemSuccess').style.display = 'none';
+        document.getElementById('premiumInput').value = '';
+        document.getElementById('premiumError').style.display = 'none';
+        document.getElementById('premiumSuccess').style.display = 'none';
     }
-    else if (view === 'dashboard') {
-        if (!isAuth()) { loginWithDiscord('dashboard'); return; }
-        checkAccess();
-        return;
+    else if (view === 'servers') {
+        if (!isAuth()) { loginWithDiscord('servers'); return; }
+        document.getElementById('viewServers').classList.add('active');
+        document.body.classList.add('app-mode');
+        loadServerSelection();
     }
     else if (view === 'admin') {
-        if (!isAdmin()) { navigateTo('landing'); return; }
-        document.getElementById('viewAdmin').classList.add('active');
-        document.body.classList.add('app-mode');
-        switchAdminTab('overview');
-    }
-    else if (view === 'access-denied') {
-        document.getElementById('viewAccessDenied').classList.add('active');
-        document.body.classList.add('app-mode');
+        checkSiteAdmin().then(function(isAdmin) {
+            if (!isAdmin) {
+                navigateTo('landing');
+                toast('Access denied', 'error');
+                return;
+            }
+            document.getElementById('viewAdmin').classList.add('active');
+            document.body.classList.add('app-mode');
+            switchAdminTab('overview');
+        });
+        return;
     }
 
     updateNav();
     window.scrollTo(0, 0);
 }
 
-function checkAccess() {
-    if (isAdmin()) {
-        showDashboard();
-        return;
-    }
-
-    fbGet('tickets').then(function(tickets) {
-        var ok = false;
-        if (tickets) {
-            for (var k in tickets) {
-                var t = tickets[k];
-                if (t.userId === currentUser.id && t.redeemed && t.status === 'active') {
-                    if (t.expiry && new Date(t.expiry) < new Date()) continue;
-                    ok = true;
-                    break;
-                }
-            }
-        }
-
-        if (ok) {
-            showDashboard();
-        } else {
-            currentView = 'access-denied';
-            document.getElementById('viewAccessDenied').classList.add('active');
-            document.body.classList.add('app-mode');
-            updateNav();
-        }
-    });
-}
-
-function showDashboard() {
-    document.getElementById('viewDashboard').classList.add('active');
-    document.body.classList.add('app-mode');
-    currentView = 'dashboard';
-    updateNav();
-    loadDashboard();
-}
-
 function updateNav() {
     var els = {
         login: document.getElementById('btnNavLogin'),
-        redeem: document.getElementById('btnNavRedeem'),
-        dash: document.getElementById('btnNavDashboard'),
+        premium: document.getElementById('btnNavPremium'),
+        servers: document.getElementById('btnNavServers'),
         admin: document.getElementById('btnNavAdmin'),
         logout: document.getElementById('btnNavLogout'),
         userInfo: document.getElementById('navUserInfo')
@@ -283,9 +276,12 @@ function updateNav() {
         document.getElementById('navAvatar').src = currentUser.avatarUrl;
         document.getElementById('navUsername').textContent = currentUser.username;
         els.logout.classList.remove('nav-hidden');
-        els.redeem.classList.remove('nav-hidden');
-        els.dash.classList.remove('nav-hidden');
-        if (isAdmin()) els.admin.classList.remove('nav-hidden');
+        els.premium.classList.remove('nav-hidden');
+        els.servers.classList.remove('nav-hidden');
+        
+        checkSiteAdmin().then(function(isAdmin) {
+            if (isAdmin) els.admin.classList.remove('nav-hidden');
+        });
     } else {
         els.login.classList.remove('nav-hidden');
     }
@@ -306,12 +302,12 @@ function scrollToSection(id) {
 }
 
 function handleGetStarted() {
-    if (isAuth()) navigateTo('dashboard');
-    else loginWithDiscord('dashboard');
+    if (isAuth()) navigateTo('servers');
+    else loginWithDiscord('servers');
 }
 
 // ═══════════════════════════════════════════════
-//  TICKET CODE GENERATION
+//  CODE GENERATION
 // ═══════════════════════════════════════════════
 function genCode() {
     var c = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -323,114 +319,172 @@ function genCode() {
     return out;
 }
 
-function regenerateTicketCode() {
-    fbGet('tickets').then(function(tickets) {
-        tickets = tickets || {};
+function regeneratePremiumCode() {
+    fbGet('premiumCodes').then(function(codes) {
+        codes = codes || {};
         var used = {};
-        for (var k in tickets) used[tickets[k].code] = 1;
+        for (var k in codes) used[codes[k].code] = 1;
         var code;
         var tries = 0;
         do {
             code = genCode();
             tries++;
         } while (used[code] && tries < 200);
-        document.getElementById('ticketCodePreview').textContent = code;
+        document.getElementById('premiumCodePreview').textContent = code;
     });
 }
 
 // ═══════════════════════════════════════════════
-//  REDEEM TICKET
+//  PREMIUM SYSTEM
 // ═══════════════════════════════════════════════
-function redeemTicket() {
-    var input = document.getElementById('redeemInput');
-    var errEl = document.getElementById('redeemError');
-    var okEl = document.getElementById('redeemSuccess');
+function redeemPremium() {
+    var input = document.getElementById('premiumInput');
+    var errEl = document.getElementById('premiumError');
+    var okEl = document.getElementById('premiumSuccess');
     var code = input.value.trim();
 
     errEl.style.display = 'none';
     okEl.style.display = 'none';
 
     if (!code) {
-        errEl.textContent = 'Please enter a ticket code.';
+        errEl.textContent = 'Please enter a premium code.';
         errEl.style.display = 'block';
         return;
     }
 
-    fbGet('tickets').then(function(tickets) {
-        tickets = tickets || {};
+    fbGet('premiumCodes').then(function(codes) {
+        codes = codes || {};
         var fk = null;
-        var ft = null;
-        for (var k in tickets) {
-            if (tickets[k].code === code) {
+        var fc = null;
+        for (var k in codes) {
+            if (codes[k].code === code) {
                 fk = k;
-                ft = tickets[k];
+                fc = codes[k];
                 break;
             }
         }
 
-        if (!ft) {
-            errEl.textContent = 'Invalid ticket code.';
+        if (!fc) {
+            errEl.textContent = 'Invalid premium code.';
             errEl.style.display = 'block';
-            return;
-        }
-        if (ft.userId !== currentUser.id) {
-            errEl.textContent = 'This code is not assigned to your account.';
-            errEl.style.display = 'block';
-            return;
-        }
-        if (ft.status !== 'active') {
-            errEl.textContent = 'This ticket is inactive. Contact @bufferclick.';
-            errEl.style.display = 'block';
-            return;
-        }
-        if (ft.expiry && new Date(ft.expiry) < new Date()) {
-            errEl.textContent = 'This ticket has expired.';
-            errEl.style.display = 'block';
-            return;
-        }
-        if (ft.redeemed) {
-            okEl.textContent = 'Already redeemed. Redirecting...';
-            okEl.style.display = 'block';
-            setTimeout(function() { navigateTo('dashboard'); }, 800);
             return;
         }
 
-        fbPatch('tickets/' + fk, { redeemed: true, redeemedAt: Date.now() }).then(function() {
-            return fbGet('dashboards/' + currentUser.id);
-        }).then(function(existing) {
-            if (!existing) {
-                return fbPut('dashboards/' + currentUser.id, {
-                    files: {},
-                    running: false,
-                    ownerId: currentUser.id,
-                    ownerName: currentUser.username,
-                    createdAt: Date.now()
-                });
-            }
+        if (fc.assignedTo && fc.assignedTo !== currentUser.id) {
+            errEl.textContent = 'This code is assigned to another user.';
+            errEl.style.display = 'block';
+            return;
+        }
+
+        if (fc.redeemed) {
+            errEl.textContent = 'This code has already been redeemed.';
+            errEl.style.display = 'block';
+            return;
+        }
+
+        if (fc.expiry && new Date(fc.expiry) < new Date()) {
+            errEl.textContent = 'This code has expired.';
+            errEl.style.display = 'block';
+            return;
+        }
+
+        fbPatch('premiumCodes/' + fk, {
+            redeemed: true,
+            redeemedBy: currentUser.id,
+            redeemedAt: Date.now()
         }).then(function() {
-            okEl.textContent = 'Ticket redeemed! Redirecting to dashboard...';
+            return fbPut('premium/' + currentUser.id, {
+                active: true,
+                code: code,
+                grantedAt: Date.now(),
+                expiresAt: fc.expiry ? new Date(fc.expiry).getTime() : null
+            });
+        }).then(function() {
+            okEl.textContent = 'Premium activated! You now have priority hosting.';
             okEl.style.display = 'block';
-            toast('Ticket redeemed successfully', 'success');
-            setTimeout(function() { navigateTo('dashboard'); }, 1200);
+            toast('Premium activated!', 'success');
+            setTimeout(function() { navigateTo('servers'); }, 1500);
         });
     });
 }
 
 // ═══════════════════════════════════════════════
-//  USER DASHBOARD
+//  SERVER SELECTION
 // ═══════════════════════════════════════════════
-function loadDashboard() {
-    var uid = currentUser.id;
-    fbGet('dashboards/' + uid).then(function(data) {
+function loadServerSelection() {
+    var grid = document.getElementById('serversGrid');
+    grid.innerHTML = '<div class="loading-spinner">Loading your servers...</div>';
+
+    fbGet('dashboards').then(function(dashboards) {
+        dashboards = dashboards || {};
+        
+        if (userGuilds.length === 0) {
+            grid.innerHTML = '<div class="empty-state"><h4>No servers found</h4><p>Make sure you have admin permissions in at least one server.</p></div>';
+            return;
+        }
+
+        grid.innerHTML = userGuilds.map(function(guild) {
+            var hasDash = !!dashboards[guild.id];
+            var statusClass = hasDash ? 'available' : 'invite-needed';
+            var statusText = hasDash ? 'Open Dashboard' : 'Invite Bot First';
+            var iconUrl = guild.icon 
+                ? 'https://cdn.discordapp.com/icons/' + guild.id + '/' + guild.icon + '.png?size=128'
+                : null;
+
+            return '<div class="server-card" onclick="selectServer(\'' + guild.id + '\', ' + hasDash + ')">' +
+                '<div class="server-card-header">' +
+                    (iconUrl 
+                        ? '<img src="' + iconUrl + '" class="server-icon" alt="">'
+                        : '<div class="server-icon-fallback">' + guild.name.charAt(0).toUpperCase() + '</div>') +
+                    '<div class="server-info">' +
+                        '<div class="server-name">' + esc(guild.name) + '</div>' +
+                        '<div class="server-id">' + guild.id + '</div>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="server-status ' + statusClass + '">' + statusText + '</div>' +
+            '</div>';
+        }).join('');
+    });
+}
+
+function selectServer(serverId, hasDash) {
+    if (!hasDash) {
+        window.open('https://discord.com/oauth2/authorize?client_id=' + CLIENT_ID + '&permissions=8&scope=bot&guild_id=' + serverId, '_blank');
+        toast('Add the bot to your server, then come back!', 'info');
+        return;
+    }
+
+    currentServerId = serverId;
+    openDashboard(serverId);
+}
+
+function openDashboard(serverId) {
+    document.getElementById('viewDashboard').classList.add('active');
+    document.body.classList.add('app-mode');
+    currentView = 'dashboard';
+    updateNav();
+    loadDashboard(serverId);
+}
+
+// ═══════════════════════════════════════════════
+//  DASHBOARD
+// ═══════════════════════════════════════════════
+function loadDashboard(serverId) {
+    currentServerId = serverId;
+    
+    fbGet('dashboards/' + serverId).then(function(data) {
         if (!data) {
+            var guild = userGuilds.find(function(g) { return g.id === serverId; });
             data = {
                 files: {},
                 running: false,
-                ownerId: uid,
+                ownerId: currentUser.id,
                 ownerName: currentUser.username,
+                serverName: guild ? guild.name : serverId,
+                serverIcon: guild && guild.icon ? 'https://cdn.discordapp.com/icons/' + guild.id + '/' + guild.icon + '.png' : null,
                 createdAt: Date.now()
             };
-            fbPut('dashboards/' + uid, data);
+            fbPut('dashboards/' + serverId, data);
         }
 
         dashData = data;
@@ -438,10 +492,28 @@ function loadDashboard() {
         openFile = null;
         editorDirty = {};
 
+        document.getElementById('dashServerName').textContent = data.serverName || 'Dashboard';
+        
+        checkPremium().then(function(isPremium) {
+            document.getElementById('dashPremiumBadge').style.display = isPremium ? '' : 'none';
+        });
+
         renderFiles();
         syncStatus();
 
         if (dashData.running) startPolling();
+    });
+}
+
+function checkPremium() {
+    if (!currentUser) return Promise.resolve(false);
+    return fbGet('premium/' + currentUser.id).then(function(premium) {
+        if (!premium || !premium.active) return false;
+        if (premium.expiresAt && premium.expiresAt < Date.now()) {
+            fbPatch('premium/' + currentUser.id, { active: false });
+            return false;
+        }
+        return true;
     });
 }
 
@@ -507,18 +579,17 @@ function fileClose() {
 }
 
 function saveCurrentFile() {
-    if (!openFile) return;
+    if (!openFile || !currentServerId) return;
     var content = document.getElementById('editorTextarea').value;
     var fileObj = { content: content, _name: openFile, updatedAt: Date.now() };
     dashData.files[openFile] = fileObj;
     editorDirty[openFile] = content;
 
-    fbPut('dashboards/' + currentUser.id + '/files/' + fKey(openFile), fileObj).then(function() {
+    fbPut('dashboards/' + currentServerId + '/files/' + fKey(openFile), fileObj).then(function() {
         toast(openFile + ' saved', 'success');
     });
 }
 
-// New file
 function openNewFileModal() {
     document.getElementById('newFileName').value = '';
     document.getElementById('newFileError').style.display = 'none';
@@ -546,14 +617,13 @@ function createNewFile() {
     var fileObj = { content: '', _name: name, createdAt: Date.now(), updatedAt: Date.now() };
     dashData.files[name] = fileObj;
 
-    fbPut('dashboards/' + currentUser.id + '/files/' + fKey(name), fileObj).then(function() {
+    fbPut('dashboards/' + currentServerId + '/files/' + fKey(name), fileObj).then(function() {
         closeModal('modalNewFile');
         fileOpen(name);
         toast(name + ' created', 'success');
     });
 }
 
-// Delete file
 function promptDelFile(name) {
     deleteFileTarget = name;
     document.getElementById('deleteFileName').textContent = name;
@@ -561,12 +631,12 @@ function promptDelFile(name) {
 }
 
 function confirmDeleteFile() {
-    if (!deleteFileTarget) return;
+    if (!deleteFileTarget || !currentServerId) return;
     var n = deleteFileTarget;
     delete dashData.files[n];
     delete editorDirty[n];
 
-    fbDel('dashboards/' + currentUser.id + '/files/' + fKey(n)).then(function() {
+    fbDel('dashboards/' + currentServerId + '/files/' + fKey(n)).then(function() {
         if (openFile === n) fileClose();
         renderFiles();
         closeModal('modalDeleteFile');
@@ -576,9 +646,107 @@ function confirmDeleteFile() {
 }
 
 // ═══════════════════════════════════════════════
+//  DASHBOARD SETTINGS
+// ═══════════════════════════════════════════════
+function openDashSettings() {
+    loadCollaborators();
+    openModal('modalDashSettings');
+}
+
+function loadCollaborators() {
+    if (!currentServerId) return;
+    
+    fbGet('dashboards/' + currentServerId + '/collaborators').then(function(collabs) {
+        var list = document.getElementById('collaboratorsList');
+        
+        if (!collabs || Object.keys(collabs).length === 0) {
+            list.innerHTML = '<p style="color:var(--text-muted);font-size:13px;text-align:center;padding:20px 0;">No collaborators yet.</p>';
+            return;
+        }
+
+        list.innerHTML = Object.entries(collabs).map(function(e) {
+            var userId = e[0];
+            var data = e[1];
+            return '<div class="collaborator-item">' +
+                '<div class="collaborator-info">' +
+                    '<div class="collaborator-name">' + esc(data.username || 'User') + '</div>' +
+                    '<div class="collaborator-id">' + userId + '</div>' +
+                '</div>' +
+                '<button class="btn-xs btn-danger" onclick="removeCollaborator(\'' + userId + '\')">Remove</button>' +
+            '</div>';
+        }).join('');
+    });
+}
+
+function addCollaborator() {
+    var input = document.getElementById('addCollabUserId');
+    var errEl = document.getElementById('addCollabError');
+    var userId = input.value.trim();
+
+    errEl.style.display = 'none';
+
+    if (!userId) {
+        errEl.textContent = 'Enter a Discord User ID.';
+        errEl.style.display = 'block';
+        return;
+    }
+
+    if (userId === currentUser.id) {
+        errEl.textContent = 'You are already the owner.';
+        errEl.style.display = 'block';
+        return;
+    }
+
+    fbPut('dashboards/' + currentServerId + '/collaborators/' + userId, {
+        username: 'User#' + userId.slice(-4),
+        addedAt: Date.now(),
+        addedBy: currentUser.id
+    }).then(function() {
+        input.value = '';
+        toast('Collaborator added', 'success');
+        loadCollaborators();
+    });
+}
+
+function removeCollaborator(userId) {
+    fbDel('dashboards/' + currentServerId + '/collaborators/' + userId).then(function() {
+        toast('Collaborator removed', 'info');
+        loadCollaborators();
+    });
+}
+
+function promptDeleteDashboard() {
+    var guild = userGuilds.find(function(g) { return g.id === currentServerId; });
+    document.getElementById('deleteDashName').textContent = guild ? guild.name : currentServerId;
+    document.getElementById('deleteDashConfirm').value = '';
+    document.getElementById('deleteDashError').style.display = 'none';
+    openModal('modalDeleteDashboard');
+}
+
+function confirmDeleteDashboard() {
+    var input = document.getElementById('deleteDashConfirm');
+    var errEl = document.getElementById('deleteDashError');
+
+    if (input.value !== 'DELETE') {
+        errEl.textContent = 'You must type DELETE to confirm.';
+        errEl.style.display = 'block';
+        return;
+    }
+
+    fbDel('dashboards/' + currentServerId).then(function() {
+        closeModal('modalDeleteDashboard');
+        closeModal('modalDashSettings');
+        toast('Dashboard deleted', 'info');
+        navigateTo('servers');
+    });
+}
+
+// ═══════════════════════════════════════════════
 //  RUN / STOP BOT
 // ═══════════════════════════════════════════════
 function runBot() {
+    if (!currentServerId) return;
+    
     var names = Object.keys(dashData.files);
     if (names.length === 0) {
         toast('Add at least one file first.', 'error');
@@ -589,11 +757,11 @@ function runBot() {
         var content = document.getElementById('editorTextarea').value;
         var fo = { content: content, _name: openFile, updatedAt: Date.now() };
         dashData.files[openFile] = fo;
-        fbPut('dashboards/' + currentUser.id + '/files/' + fKey(openFile), fo);
+        fbPut('dashboards/' + currentServerId + '/files/' + fKey(openFile), fo);
     }
 
     dashData.running = true;
-    fbPatch('dashboards/' + currentUser.id, { running: true, lastStarted: Date.now() });
+    fbPatch('dashboards/' + currentServerId, { running: true, lastStarted: Date.now() });
 
     clearConsole();
     cLog('Syncing files to server...', 'info');
@@ -607,8 +775,10 @@ function runBot() {
 }
 
 function stopBot() {
+    if (!currentServerId) return;
+    
     dashData.running = false;
-    fbPatch('dashboards/' + currentUser.id, { running: false });
+    fbPatch('dashboards/' + currentServerId, { running: false });
     cLog('Stop signal sent.', 'warn');
     cLog('Bot process terminated.', 'info');
     syncStatus();
@@ -656,9 +826,10 @@ function toggleConsole() {
 }
 
 function startPolling() {
+    if (!currentServerId) return;
     stopPolling();
     pollInterval = setInterval(function() {
-        fbGet('dashboards/' + currentUser.id + '/consoleOutput').then(function(out) {
+        fbGet('dashboards/' + currentServerId + '/consoleOutput').then(function(out) {
             if (out) {
                 var body = document.getElementById('consoleBody');
                 body.innerHTML = '';
@@ -673,7 +844,7 @@ function startPolling() {
             }
         });
 
-        fbGet('dashboards/' + currentUser.id + '/running').then(function(running) {
+        fbGet('dashboards/' + currentServerId + '/running').then(function(running) {
             if (running !== dashData.running) {
                 dashData.running = !!running;
                 syncStatus();
@@ -715,177 +886,170 @@ function switchAdminTab(tab) {
 
     var map = {
         overview: 'adminTabOverview',
-        tickets: 'adminTabTickets',
+        premium: 'adminTabPremium',
         create: 'adminTabCreate',
-        dashboards: 'adminTabDashboards'
+        dashboards: 'adminTabDashboards',
+        siteadmins: 'adminTabSiteAdmins'
     };
     var el = document.getElementById(map[tab]);
     if (el) el.style.display = '';
 
     if (tab === 'overview') loadOverview();
-    if (tab === 'tickets') loadTickets();
-    if (tab === 'create') regenerateTicketCode();
-    if (tab === 'dashboards') loadDashboards();
+    if (tab === 'premium') loadPremiumCodes();
+    if (tab === 'create') regeneratePremiumCode();
+    if (tab === 'dashboards') loadAllDashboards();
+    if (tab === 'siteadmins') loadSiteAdmins();
 }
 
 function loadOverview() {
-    Promise.all([fbGet('tickets'), fbGet('dashboards')]).then(function(res) {
-        var tickets = res[0] || {};
-        var dashes = res[1] || {};
+    Promise.all([fbGet('premiumCodes'), fbGet('premium'), fbGet('dashboards'), fbGet('siteAdmins')]).then(function(res) {
+        var codes = res[0] || {};
+        var premium = res[1] || {};
+        var dashboards = res[2] || {};
+        var admins = res[3] || {};
 
-        var arr = Object.values(tickets);
-        document.getElementById('statTotalTickets').textContent = arr.length;
-        document.getElementById('statActiveTickets').textContent = arr.filter(function(t) { return t.status === 'active'; }).length;
-        document.getElementById('statInactiveTickets').textContent = arr.filter(function(t) { return t.status !== 'active'; }).length;
-        document.getElementById('statRunning').textContent = Object.values(dashes).filter(function(d) { return d.running; }).length;
+        document.getElementById('statTotalServers').textContent = Object.keys(dashboards).length;
+        document.getElementById('statPremiumUsers').textContent = Object.values(premium).filter(function(p) { return p.active; }).length;
+        document.getElementById('statRunning').textContent = Object.values(dashboards).filter(function(d) { return d.running; }).length;
+        document.getElementById('statSiteAdmins').textContent = Object.keys(admins).length + 1;
 
-        var sorted = Object.entries(tickets)
+        var sorted = Object.entries(dashboards)
             .sort(function(a, b) { return (b[1].createdAt || 0) - (a[1].createdAt || 0); })
             .slice(0, 6);
-        renderTicketCards(sorted, document.getElementById('adminRecentTickets'));
+        
+        var container = document.getElementById('adminRecentDashboards');
+        if (sorted.length === 0) {
+            container.innerHTML = '<div class="empty-state"><h4>No dashboards yet</h4></div>';
+            return;
+        }
+
+        container.innerHTML = sorted.map(function(e) {
+            var sid = e[0];
+            var d = e[1];
+            var fc = d.files ? Object.keys(d.files).length : 0;
+            return '<div class="admin-dash-card">' +
+                '<h4>' + esc(d.serverName || sid) + '</h4>' +
+                '<div class="admin-dash-meta">' +
+                    '<span>Server ID: ' + sid + '</span>' +
+                    '<span>Owner: ' + esc(d.ownerName || 'Unknown') + '</span>' +
+                    '<span>Files: ' + fc + '</span>' +
+                    '<span>Status: ' + (d.running ? '<span style="color:var(--success)">Running</span>' : 'Stopped') + '</span>' +
+                '</div>' +
+            '</div>';
+        }).join('');
     });
 }
 
-function loadTickets() {
-    fbGet('tickets').then(function(tickets) {
-        tickets = tickets || {};
-        allTicketCache = Object.entries(tickets)
+function loadPremiumCodes() {
+    fbGet('premiumCodes').then(function(codes) {
+        codes = codes || {};
+        allPremiumCache = Object.entries(codes)
             .sort(function(a, b) { return (b[1].createdAt || 0) - (a[1].createdAt || 0); });
-        renderTicketCards(allTicketCache, document.getElementById('adminAllTickets'));
+        renderPremiumCards(allPremiumCache);
     });
 }
 
-function filterTickets() {
-    var q = document.getElementById('ticketSearch').value.toLowerCase().trim();
-    var filtered = allTicketCache.filter(function(e) {
-        var t = e[1];
-        return t.code.toLowerCase().indexOf(q) !== -1 ||
-            (t.userId || '').indexOf(q) !== -1 ||
-            (t.label || '').toLowerCase().indexOf(q) !== -1;
+function filterPremiumCodes() {
+    var q = document.getElementById('premiumSearch').value.toLowerCase().trim();
+    var filtered = allPremiumCache.filter(function(e) {
+        var c = e[1];
+        return c.code.toLowerCase().indexOf(q) !== -1 ||
+            (c.assignedTo || '').indexOf(q) !== -1 ||
+            (c.redeemedBy || '').indexOf(q) !== -1 ||
+            (c.label || '').toLowerCase().indexOf(q) !== -1;
     });
-    renderTicketCards(filtered, document.getElementById('adminAllTickets'));
+    renderPremiumCards(filtered);
 }
 
-function renderTicketCards(entries, container) {
+function renderPremiumCards(entries) {
+    var container = document.getElementById('adminAllPremium');
+    
     if (entries.length === 0) {
-        container.innerHTML = '<div class="empty-state"><h4>No tickets found</h4><p>Create one from the Create Ticket tab.</p></div>';
+        container.innerHTML = '<div class="empty-state"><h4>No premium codes found</h4></div>';
         return;
     }
 
     container.innerHTML = entries.map(function(e) {
         var key = e[0];
-        var t = e[1];
-        var sc = t.status || 'inactive';
-        if (t.expiry && new Date(t.expiry) < new Date()) sc = 'expired';
+        var c = e[1];
+        var status = c.redeemed ? 'inactive' : 'active';
+        if (c.expiry && new Date(c.expiry) < new Date()) status = 'expired';
 
         return '<div class="ticket-card">' +
-            '<div class="ticket-code">' + esc(t.code) + '</div>' +
+            '<div class="ticket-code">' + esc(c.code) + '</div>' +
             '<div class="ticket-meta">' +
-                '<div class="ticket-meta-row">' +
-                    '<span class="ticket-meta-label">User ID</span>' +
-                    '<span class="ticket-meta-value">' + esc(t.userId || 'N/A') + '</span>' +
-                '</div>' +
-                '<div class="ticket-meta-row">' +
-                    '<span class="ticket-meta-label">Status</span>' +
-                    '<span class="ticket-status ' + sc + '">' + sc + '</span>' +
-                '</div>' +
-                '<div class="ticket-meta-row">' +
-                    '<span class="ticket-meta-label">Redeemed</span>' +
-                    '<span class="ticket-meta-value">' + (t.redeemed ? 'Yes' : 'No') + '</span>' +
-                '</div>' +
-                (t.label ? '<div class="ticket-meta-row"><span class="ticket-meta-label">Label</span><span class="ticket-meta-value">' + esc(t.label) + '</span></div>' : '') +
-                (t.expiry ? '<div class="ticket-meta-row"><span class="ticket-meta-label">Expires</span><span class="ticket-meta-value">' + t.expiry + '</span></div>' : '') +
-                '<div class="ticket-meta-row">' +
-                    '<span class="ticket-meta-label">Created</span>' +
-                    '<span class="ticket-meta-value">' + (t.createdAt ? new Date(t.createdAt).toLocaleDateString() : 'N/A') + '</span>' +
-                '</div>' +
+                (c.assignedTo ? '<div class="ticket-meta-row"><span class="ticket-meta-label">Assigned To</span><span class="ticket-meta-value">' + esc(c.assignedTo) + '</span></div>' : '') +
+                (c.redeemedBy ? '<div class="ticket-meta-row"><span class="ticket-meta-label">Redeemed By</span><span class="ticket-meta-value">' + esc(c.redeemedBy) + '</span></div>' : '') +
+                '<div class="ticket-meta-row"><span class="ticket-meta-label">Status</span><span class="ticket-status ' + status + '">' + status + '</span></div>' +
+                (c.label ? '<div class="ticket-meta-row"><span class="ticket-meta-label">Label</span><span class="ticket-meta-value">' + esc(c.label) + '</span></div>' : '') +
+                (c.expiry ? '<div class="ticket-meta-row"><span class="ticket-meta-label">Expires</span><span class="ticket-meta-value">' + c.expiry + '</span></div>' : '<div class="ticket-meta-row"><span class="ticket-meta-label">Duration</span><span class="ticket-meta-value">Permanent</span></div>') +
+                '<div class="ticket-meta-row"><span class="ticket-meta-label">Created</span><span class="ticket-meta-value">' + (c.createdAt ? new Date(c.createdAt).toLocaleDateString() : 'N/A') + '</span></div>' +
             '</div>' +
             '<div class="ticket-actions">' +
-                '<button class="btn-xs ' + (t.status === 'active' ? 'btn-danger' : 'btn-success') + '" onclick="toggleTicket(\'' + key + '\',\'' + (t.status === 'active' ? 'inactive' : 'active') + '\')">' +
-                    (t.status === 'active' ? 'Deactivate' : 'Activate') +
-                '</button>' +
-                '<button class="btn-xs btn-danger" onclick="promptDelTicket(\'' + key + '\')">Delete</button>' +
+                '<button class="btn-xs btn-danger" onclick="promptDelPremium(\'' + key + '\')">Delete</button>' +
             '</div>' +
         '</div>';
     }).join('');
 }
 
-function toggleTicket(key, status) {
-    fbPatch('tickets/' + key, { status: status }).then(function() {
-        toast('Ticket ' + status, 'success');
-        var tab = document.querySelector('.admin-nav-item.active');
-        if (tab) switchAdminTab(tab.dataset.adminTab);
-    });
-}
+function createPremiumCode() {
+    var userId = document.getElementById('premiumUserId').value.trim();
+    var code = document.getElementById('premiumCodePreview').textContent.trim();
+    var expiry = document.getElementById('premiumExpiry').value;
+    var label = document.getElementById('premiumLabel').value.trim();
 
-function promptDelTicket(key) {
-    deleteTicketTarget = key;
-    openModal('modalDeleteTicket');
-}
-
-function confirmDeleteTicket() {
-    if (!deleteTicketTarget) return;
-    fbDel('tickets/' + deleteTicketTarget).then(function() {
-        closeModal('modalDeleteTicket');
-        toast('Ticket deleted', 'info');
-        deleteTicketTarget = null;
-        var tab = document.querySelector('.admin-nav-item.active');
-        if (tab) switchAdminTab(tab.dataset.adminTab);
-    });
-}
-
-function createTicket() {
-    var userId = document.getElementById('ticketUserId').value.trim();
-    var code = document.getElementById('ticketCodePreview').textContent.trim();
-    var expiry = document.getElementById('ticketExpiry').value;
-    var status = document.querySelector('input[name="ticketStatus"]:checked').value;
-    var label = document.getElementById('ticketLabel').value.trim();
-
-    var errEl = document.getElementById('createTicketError');
-    var okEl = document.getElementById('createTicketSuccess');
+    var errEl = document.getElementById('createPremiumError');
+    var okEl = document.getElementById('createPremiumSuccess');
     errEl.style.display = 'none';
     okEl.style.display = 'none';
 
-    if (!userId) {
-        errEl.textContent = 'Enter a Discord User ID.';
-        errEl.style.display = 'block';
-        return;
-    }
     if (!code || code === '-----') {
         errEl.textContent = 'Generate a code first.';
         errEl.style.display = 'block';
         return;
     }
 
-    var tKey = code.replace(/-/g, '');
-    fbPut('tickets/' + tKey, {
+    var cKey = code.replace(/-/g, '');
+    fbPut('premiumCodes/' + cKey, {
         code: code,
-        userId: userId,
-        status: status,
+        assignedTo: userId || null,
         expiry: expiry || null,
         label: label || null,
         redeemed: false,
+        redeemedBy: null,
         createdAt: Date.now()
     }).then(function() {
-        okEl.textContent = 'Ticket created: ' + code;
+        okEl.textContent = 'Premium code created: ' + code;
         okEl.style.display = 'block';
-        toast('Ticket created', 'success');
+        toast('Premium code created', 'success');
 
-        document.getElementById('ticketUserId').value = '';
-        document.getElementById('ticketExpiry').value = '';
-        document.getElementById('ticketLabel').value = '';
-        regenerateTicketCode();
+        document.getElementById('premiumUserId').value = '';
+        document.getElementById('premiumExpiry').value = '';
+        document.getElementById('premiumLabel').value = '';
+        regeneratePremiumCode();
     });
 }
 
-// ═══════════════════════════════════════════════
-//  ADMIN DASHBOARDS
-// ═══════════════════════════════════════════════
-function loadDashboards() {
+function promptDelPremium(key) {
+    deletePremiumTarget = key;
+    openModal('modalDeletePremium');
+}
+
+function confirmDeletePremium() {
+    if (!deletePremiumTarget) return;
+    fbDel('premiumCodes/' + deletePremiumTarget).then(function() {
+        closeModal('modalDeletePremium');
+        toast('Premium code deleted', 'info');
+        deletePremiumTarget = null;
+        loadPremiumCodes();
+    });
+}
+
+function loadAllDashboards() {
     fbGet('dashboards').then(function(d) {
         d = d || {};
         allDashCache = d;
-        renderDashCards(d);
+        renderAllDashCards(d);
     });
 }
 
@@ -894,14 +1058,14 @@ function filterDashboards() {
     var filtered = {};
     for (var id in allDashCache) {
         var d = allDashCache[id];
-        if (id.indexOf(q) !== -1 || (d.ownerName || '').toLowerCase().indexOf(q) !== -1) {
+        if (id.indexOf(q) !== -1 || (d.serverName || '').toLowerCase().indexOf(q) !== -1 || (d.ownerName || '').toLowerCase().indexOf(q) !== -1) {
             filtered[id] = d;
         }
     }
-    renderDashCards(filtered);
+    renderAllDashCards(filtered);
 }
 
-function renderDashCards(dashboards) {
+function renderAllDashCards(dashboards) {
     var container = document.getElementById('adminAllDashboards');
     var entries = Object.entries(dashboards);
 
@@ -911,155 +1075,112 @@ function renderDashCards(dashboards) {
     }
 
     container.innerHTML = entries.map(function(e) {
-        var uid = e[0];
+        var sid = e[0];
         var d = e[1];
         var fc = d.files ? Object.keys(d.files).length : 0;
-        var run = d.running === true;
 
         return '<div class="admin-dash-card">' +
-            '<h4>' + esc(d.ownerName || 'Unknown') + '</h4>' +
+            '<h4>' + esc(d.serverName || sid) + '</h4>' +
             '<div class="admin-dash-meta">' +
-                '<span>ID: ' + esc(uid) + '</span>' +
+                '<span>Server ID: ' + sid + '</span>' +
+                '<span>Owner: ' + esc(d.ownerName || 'Unknown') + ' (' + (d.ownerId || 'N/A') + ')</span>' +
                 '<span>Files: ' + fc + '</span>' +
-                '<span>Status: ' + (run ? '<span style="color:var(--success)">Running</span>' : 'Stopped') + '</span>' +
+                '<span>Status: ' + (d.running ? '<span style="color:var(--success)">Running</span>' : 'Stopped') + '</span>' +
                 (d.createdAt ? '<span>Created: ' + new Date(d.createdAt).toLocaleDateString() + '</span>' : '') +
             '</div>' +
             '<div class="admin-dash-actions">' +
-                '<button class="btn-xs btn-secondary" onclick="openViewer(\'' + escA(uid) + '\')">View Files</button>' +
-                (run ? '<button class="btn-xs btn-danger" onclick="adminStop(\'' + escA(uid) + '\')">Shutdown</button>' : '') +
+                (d.running ? '<button class="btn-xs btn-danger" onclick="adminStopBot(\'' + sid + '\')">Shutdown</button>' : '') +
+                '<button class="btn-xs btn-danger" onclick="adminDeleteDash(\'' + sid + '\')">Delete</button>' +
             '</div>' +
         '</div>';
     }).join('');
 }
 
-function adminStop(uid) {
-    fbPatch('dashboards/' + uid, { running: false }).then(function() {
-        toast('Dashboard shut down', 'info');
-        loadDashboards();
+function adminStopBot(serverId) {
+    fbPatch('dashboards/' + serverId, { running: false }).then(function() {
+        toast('Bot shut down', 'info');
+        loadAllDashboards();
     });
 }
 
-// ═══════════════════════════════════════════════
-//  ADMIN VIEWER
-// ═══════════════════════════════════════════════
-function openViewer(uid) {
-    viewerUserId = uid;
-    fbGet('dashboards/' + uid).then(function(data) {
-        data = data || { files: {} };
-        viewerData = data;
-        viewerData.files = decodeFiles(data.files);
-        viewerOpenFile = null;
+function adminDeleteDash(serverId) {
+    if (!confirm('Delete this entire dashboard? This cannot be undone.')) return;
+    fbDel('dashboards/' + serverId).then(function() {
+        toast('Dashboard deleted', 'info');
+        loadAllDashboards();
+    });
+}
 
-        document.getElementById('adminViewerTitle').textContent = 'Viewing: ' + (data.ownerName || uid);
+function loadSiteAdmins() {
+    fbGet('siteAdmins').then(function(admins) {
+        admins = admins || {};
+        var list = document.getElementById('siteAdminList');
+        
+        var html = '<div class="admin-item">' +
+            '<div class="admin-item-info">' +
+                '<div>' +
+                    '<div class="admin-item-label">👑 You (Owner)</div>' +
+                    '<div class="admin-item-id">' + OWNER_ID + '</div>' +
+                '</div>' +
+            '</div>' +
+            '<span class="admin-owner-badge">OWNER</span>' +
+        '</div>';
 
-        var dot = document.getElementById('adminViewerDot');
-        var st = document.getElementById('adminViewerStatus');
-        if (data.running) {
-            dot.className = 'status-dot running';
-            st.textContent = 'Running';
-        } else {
-            dot.className = 'status-dot';
-            st.textContent = 'Stopped';
+        for (var uid in admins) {
+            html += '<div class="admin-item">' +
+                '<div class="admin-item-info">' +
+                    '<div>' +
+                        '<div class="admin-item-label">' + (admins[uid].username || 'Admin') + '</div>' +
+                        '<div class="admin-item-id">' + uid + '</div>' +
+                    '</div>' +
+                '</div>' +
+                '<button class="btn-xs btn-danger" onclick="removeSiteAdmin(\'' + uid + '\')">Remove</button>' +
+            '</div>';
         }
 
-        renderViewerFiles();
-        document.getElementById('adminViewerOverlay').classList.add('active');
+        list.innerHTML = html;
     });
 }
 
-function closeAdminViewer() {
-    document.getElementById('adminViewerOverlay').classList.remove('active');
-    viewerUserId = null;
-}
+function addSiteAdmin() {
+    var input = document.getElementById('newAdminUserId');
+    var errEl = document.getElementById('addAdminError');
+    var okEl = document.getElementById('addAdminSuccess');
+    var userId = input.value.trim();
 
-function renderViewerFiles() {
-    var list = document.getElementById('adminViewerFileList');
-    var names = Object.keys(viewerData.files).sort();
-    list.innerHTML = '';
-
-    var emEl = document.getElementById('adminViewerEmpty');
-    var edEl = document.getElementById('adminViewerEditor');
-
-    if (names.length === 0) {
-        emEl.style.display = 'flex';
-        edEl.classList.remove('active');
-        return;
-    }
-    emEl.style.display = 'none';
-
-    names.forEach(function(n) {
-        var item = document.createElement('div');
-        item.className = 'dash-file-item' + (viewerOpenFile === n ? ' active' : '');
-        item.innerHTML = '<span class="dash-file-name">' + esc(n) + '</span>';
-        item.onclick = function() { viewerFileOpen(n); };
-        list.appendChild(item);
-    });
-}
-
-function viewerFileOpen(name) {
-    if (viewerOpenFile) {
-        viewerData.files[viewerOpenFile] = Object.assign(
-            {},
-            viewerData.files[viewerOpenFile] || {},
-            { content: document.getElementById('adminViewerTextarea').value }
-        );
-    }
-    viewerOpenFile = name;
-    var f = viewerData.files[name] || {};
-
-    document.getElementById('adminViewerEditor').classList.add('active');
-    document.getElementById('adminViewerEmpty').style.display = 'none';
-    document.getElementById('adminViewerTextarea').value = f.content || '';
-
-    updateLines('adminViewerLines', 'adminViewerTextarea');
-
-    document.getElementById('adminViewerTabs').innerHTML =
-        '<button class="dash-editor-tab active">' + esc(name) + '</button>';
-
-    renderViewerFiles();
-}
-
-function adminViewerSave() {
-    if (!viewerOpenFile || !viewerUserId) return;
-    var content = document.getElementById('adminViewerTextarea').value;
-    var obj = { content: content, _name: viewerOpenFile, updatedAt: Date.now() };
-    viewerData.files[viewerOpenFile] = obj;
-
-    fbPut('dashboards/' + viewerUserId + '/files/' + fKey(viewerOpenFile), obj).then(function() {
-        toast(viewerOpenFile + ' saved', 'success');
-    });
-}
-
-function adminViewerAddFile() {
-    document.getElementById('adminNewFileName').value = '';
-    document.getElementById('adminNewFileError').style.display = 'none';
-    openModal('modalAdminNewFile');
-    setTimeout(function() { document.getElementById('adminNewFileName').focus(); }, 100);
-}
-
-function adminViewerCreateFile() {
-    var name = document.getElementById('adminNewFileName').value.trim();
-    var errEl = document.getElementById('adminNewFileError');
     errEl.style.display = 'none';
+    okEl.style.display = 'none';
 
-    if (!name) {
-        errEl.textContent = 'Enter a filename.';
-        errEl.style.display = 'block';
-        return;
-    }
-    if (viewerData.files[name]) {
-        errEl.textContent = 'File already exists.';
+    if (!userId) {
+        errEl.textContent = 'Enter a Discord User ID.';
         errEl.style.display = 'block';
         return;
     }
 
-    var obj = { content: '', _name: name, createdAt: Date.now(), updatedAt: Date.now() };
-    viewerData.files[name] = obj;
+    if (userId === OWNER_ID) {
+        errEl.textContent = 'You are already the owner.';
+        errEl.style.display = 'block';
+        return;
+    }
 
-    fbPut('dashboards/' + viewerUserId + '/files/' + fKey(name), obj).then(function() {
-        closeModal('modalAdminNewFile');
-        viewerFileOpen(name);
-        toast(name + ' added', 'success');
+    fbPut('siteAdmins/' + userId, {
+        username: 'Admin#' + userId.slice(-4),
+        grantedAt: Date.now(),
+        grantedBy: currentUser.id
+    }).then(function() {
+        input.value = '';
+        okEl.textContent = 'Admin access granted!';
+        okEl.style.display = 'block';
+        toast('Admin added', 'success');
+        loadSiteAdmins();
+    });
+}
+
+function removeSiteAdmin(userId) {
+    if (!confirm('Remove admin access for this user?')) return;
+    fbDel('siteAdmins/' + userId).then(function() {
+        toast('Admin removed', 'info');
+        loadSiteAdmins();
     });
 }
 
@@ -1133,31 +1254,8 @@ document.getElementById('editorTextarea').addEventListener('keydown', function(e
     }
 });
 
-// Admin viewer textarea
-document.getElementById('adminViewerTextarea').addEventListener('input', function() {
-    updateLines('adminViewerLines', 'adminViewerTextarea');
-});
-
-document.getElementById('adminViewerTextarea').addEventListener('scroll', function() {
-    document.getElementById('adminViewerLines').scrollTop = this.scrollTop;
-});
-
-document.getElementById('adminViewerTextarea').addEventListener('keydown', function(e) {
-    if (e.key === 'Tab') {
-        e.preventDefault();
-        var s = this.selectionStart;
-        this.value = this.value.substring(0, s) + '    ' + this.value.substring(this.selectionEnd);
-        this.selectionStart = this.selectionEnd = s + 4;
-        updateLines('adminViewerLines', 'adminViewerTextarea');
-    }
-    if ((e.ctrlKey || e.metaKey) && e.key === 's') {
-        e.preventDefault();
-        adminViewerSave();
-    }
-});
-
-// Redeem input auto-format
-document.getElementById('redeemInput').addEventListener('input', function() {
+// Premium input auto-format
+document.getElementById('premiumInput').addEventListener('input', function() {
     var clean = this.value.replace(/[^a-zA-Z0-9]/g, '');
     if (clean.length > 15) clean = clean.substring(0, 15);
     var out = '';
@@ -1168,15 +1266,12 @@ document.getElementById('redeemInput').addEventListener('input', function() {
     this.value = out;
 });
 
-// Escape to close modals / viewer
+// Escape to close modals
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
         document.querySelectorAll('.modal-overlay.active').forEach(function(m) {
             m.classList.remove('active');
         });
-        if (document.getElementById('adminViewerOverlay').classList.contains('active')) {
-            closeAdminViewer();
-        }
     }
     if ((e.ctrlKey || e.metaKey) && e.key === 's') {
         e.preventDefault();
@@ -1246,7 +1341,7 @@ function init() {
         updateNav();
 
         if (oauthOk) {
-            var ret = localStorage.getItem('inj_return') || 'dashboard';
+            var ret = localStorage.getItem('inj_return') || 'servers';
             localStorage.removeItem('inj_return');
             navigateTo(ret);
         }
