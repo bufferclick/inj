@@ -323,7 +323,11 @@ function regeneratePremiumCode() {
     fbGet('premiumCodes').then(function(codes) {
         codes = codes || {};
         var used = {};
-        for (var k in codes) used[codes[k].code] = 1;
+        for (var k in codes) {
+            if (codes[k] && codes[k].code) {
+                used[codes[k].code] = 1;
+            }
+        }
         var code;
         var tries = 0;
         do {
@@ -357,7 +361,7 @@ function redeemPremium() {
         var fk = null;
         var fc = null;
         for (var k in codes) {
-            if (codes[k].code === code) {
+            if (codes[k] && codes[k].code === code) {
                 fk = k;
                 fc = codes[k];
                 break;
@@ -420,7 +424,6 @@ function loadServerSelection() {
         return;
     }
 
-    // Show all servers as available - dashboard will be created on click if needed
     grid.innerHTML = userGuilds.map(function(guild) {
         var iconUrl = guild.icon 
             ? 'https://cdn.discordapp.com/icons/' + guild.id + '/' + guild.icon + '.png?size=128'
@@ -447,9 +450,17 @@ function selectServer(serverId) {
 }
 
 function openDashboard(serverId) {
+    closeMobileNav();
+    document.querySelectorAll('.view').forEach(function(v) {
+        v.classList.remove('active');
+    });
+    
     document.getElementById('viewDashboard').classList.add('active');
     document.body.classList.add('app-mode');
     currentView = 'dashboard';
+    
+    window.scrollTo(0, 0);
+    
     updateNav();
     loadDashboard(serverId);
 }
@@ -896,12 +907,20 @@ function loadOverview() {
         var dashboards = res[2] || {};
         var admins = res[3] || {};
 
-        document.getElementById('statTotalServers').textContent = Object.keys(dashboards).length;
-        document.getElementById('statPremiumUsers').textContent = Object.values(premium).filter(function(p) { return p.active; }).length;
-        document.getElementById('statRunning').textContent = Object.values(dashboards).filter(function(d) { return d.running; }).length;
+        // Filter valid dashboards only
+        var validDashboards = {};
+        for (var sid in dashboards) {
+            if (dashboards[sid] && typeof dashboards[sid] === 'object' && dashboards[sid].serverName) {
+                validDashboards[sid] = dashboards[sid];
+            }
+        }
+
+        document.getElementById('statTotalServers').textContent = Object.keys(validDashboards).length;
+        document.getElementById('statPremiumUsers').textContent = Object.values(premium).filter(function(p) { return p && p.active; }).length;
+        document.getElementById('statRunning').textContent = Object.values(validDashboards).filter(function(d) { return d.running; }).length;
         document.getElementById('statSiteAdmins').textContent = Object.keys(admins).length + 1;
 
-        var sorted = Object.entries(dashboards)
+        var sorted = Object.entries(validDashboards)
             .sort(function(a, b) { return (b[1].createdAt || 0) - (a[1].createdAt || 0); })
             .slice(0, 6);
         
@@ -931,8 +950,19 @@ function loadOverview() {
 function loadPremiumCodes() {
     fbGet('premiumCodes').then(function(codes) {
         codes = codes || {};
-        allPremiumCache = Object.entries(codes)
-            .sort(function(a, b) { return (b[1].createdAt || 0) - (a[1].createdAt || 0); });
+        
+        // Filter valid codes only
+        var validCodes = [];
+        for (var k in codes) {
+            if (codes[k] && typeof codes[k] === 'object' && codes[k].code) {
+                validCodes.push([k, codes[k]]);
+            }
+        }
+        
+        allPremiumCache = validCodes.sort(function(a, b) { 
+            return (b[1].createdAt || 0) - (a[1].createdAt || 0); 
+        });
+        
         renderPremiumCards(allPremiumCache);
     });
 }
@@ -1015,6 +1045,11 @@ function createPremiumCode() {
         document.getElementById('premiumExpiry').value = '';
         document.getElementById('premiumLabel').value = '';
         regeneratePremiumCode();
+        
+        // Refresh premium codes list
+        setTimeout(function() {
+            loadPremiumCodes();
+        }, 500);
     });
 }
 
@@ -1036,8 +1071,17 @@ function confirmDeletePremium() {
 function loadAllDashboards() {
     fbGet('dashboards').then(function(d) {
         d = d || {};
-        allDashCache = d;
-        renderAllDashCards(d);
+        
+        // Filter valid dashboards only
+        var validDashboards = {};
+        for (var sid in d) {
+            if (d[sid] && typeof d[sid] === 'object' && d[sid].serverName) {
+                validDashboards[sid] = d[sid];
+            }
+        }
+        
+        allDashCache = validDashboards;
+        renderAllDashCards(validDashboards);
     });
 }
 
@@ -1114,16 +1158,19 @@ function loadSiteAdmins() {
             '<span class="admin-owner-badge">OWNER</span>' +
         '</div>';
 
+        // Filter valid admins only
         for (var uid in admins) {
-            html += '<div class="admin-item">' +
-                '<div class="admin-item-info">' +
-                    '<div>' +
-                        '<div class="admin-item-label">' + (admins[uid].username || 'Admin') + '</div>' +
-                        '<div class="admin-item-id">' + uid + '</div>' +
+            if (admins[uid] && typeof admins[uid] === 'object') {
+                html += '<div class="admin-item">' +
+                    '<div class="admin-item-info">' +
+                        '<div>' +
+                            '<div class="admin-item-label">' + (admins[uid].username || 'Admin') + '</div>' +
+                            '<div class="admin-item-id">' + uid + '</div>' +
+                        '</div>' +
                     '</div>' +
-                '</div>' +
-                '<button class="btn-xs btn-danger" onclick="removeSiteAdmin(\'' + uid + '\')">Remove</button>' +
-            '</div>';
+                    '<button class="btn-xs btn-danger" onclick="removeSiteAdmin(\'' + uid + '\')">Remove</button>' +
+                '</div>';
+            }
         }
 
         list.innerHTML = html;
