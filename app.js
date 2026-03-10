@@ -415,45 +415,33 @@ function loadServerSelection() {
     var grid = document.getElementById('serversGrid');
     grid.innerHTML = '<div class="loading-spinner">Loading your servers...</div>';
 
-    fbGet('dashboards').then(function(dashboards) {
-        dashboards = dashboards || {};
-        
-        if (userGuilds.length === 0) {
-            grid.innerHTML = '<div class="empty-state"><h4>No servers found</h4><p>Make sure you have admin permissions in at least one server.</p></div>';
-            return;
-        }
-
-        grid.innerHTML = userGuilds.map(function(guild) {
-            var hasDash = !!dashboards[guild.id];
-            var statusClass = hasDash ? 'available' : 'invite-needed';
-            var statusText = hasDash ? 'Open Dashboard' : 'Invite Bot First';
-            var iconUrl = guild.icon 
-                ? 'https://cdn.discordapp.com/icons/' + guild.id + '/' + guild.icon + '.png?size=128'
-                : null;
-
-            return '<div class="server-card" onclick="selectServer(\'' + guild.id + '\', ' + hasDash + ')">' +
-                '<div class="server-card-header">' +
-                    (iconUrl 
-                        ? '<img src="' + iconUrl + '" class="server-icon" alt="">'
-                        : '<div class="server-icon-fallback">' + guild.name.charAt(0).toUpperCase() + '</div>') +
-                    '<div class="server-info">' +
-                        '<div class="server-name">' + esc(guild.name) + '</div>' +
-                        '<div class="server-id">' + guild.id + '</div>' +
-                    '</div>' +
-                '</div>' +
-                '<div class="server-status ' + statusClass + '">' + statusText + '</div>' +
-            '</div>';
-        }).join('');
-    });
-}
-
-function selectServer(serverId, hasDash) {
-    if (!hasDash) {
-        window.open('https://discord.com/oauth2/authorize?client_id=' + CLIENT_ID + '&permissions=8&scope=bot&guild_id=' + serverId, '_blank');
-        toast('Add the bot to your server, then come back!', 'info');
+    if (userGuilds.length === 0) {
+        grid.innerHTML = '<div class="empty-state"><h4>No servers found</h4><p>Make sure you have admin permissions in at least one server.</p></div>';
         return;
     }
 
+    // Show all servers as available - dashboard will be created on click if needed
+    grid.innerHTML = userGuilds.map(function(guild) {
+        var iconUrl = guild.icon 
+            ? 'https://cdn.discordapp.com/icons/' + guild.id + '/' + guild.icon + '.png?size=128'
+            : null;
+
+        return '<div class="server-card" onclick="selectServer(\'' + guild.id + '\')">' +
+            '<div class="server-card-header">' +
+                (iconUrl 
+                    ? '<img src="' + iconUrl + '" class="server-icon" alt="">'
+                    : '<div class="server-icon-fallback">' + guild.name.charAt(0).toUpperCase() + '</div>') +
+                '<div class="server-info">' +
+                    '<div class="server-name">' + esc(guild.name) + '</div>' +
+                    '<div class="server-id">' + guild.id + '</div>' +
+                '</div>' +
+            '</div>' +
+            '<div class="server-status available">Open Dashboard</div>' +
+        '</div>';
+    }).join('');
+}
+
+function selectServer(serverId) {
     currentServerId = serverId;
     openDashboard(serverId);
 }
